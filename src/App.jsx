@@ -12,7 +12,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
-  // 1. Upload image -> create layer with positioning & transformation properties
+  // Upload image -> create layer with positioning & transformation properties
   function handleUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -22,24 +22,21 @@ export default function App() {
       const img = new Image();
       img.src = reader.result;
       img.onload = () => {
-        // Calculate a reasonable starting size that fits the canvas
-        const scale = Math.min(400 / img.width, 300 / img.height, 1);
+        const scale = Math.min(500 / img.width, 350 / img.height, 1);
         const w = img.width * scale;
         const h = img.height * scale;
 
         const newLayer = {
           id: Date.now(),
-          name: `Layer ${layers.length + 1}`,
+          name: `Image Layer ${layers.length + 1}`,
           image: reader.result,
           visible: true,
           brightness: 100,
           contrast: 100,
-          // Position & Size dimensions
           x: (800 - w) / 2, 
           y: (500 - h) / 2,
           width: w,
           height: h,
-          // Cutout & Crop states
           isCircleCutout: false,
           cropX: 0,
           cropY: 0,
@@ -86,11 +83,10 @@ export default function App() {
     );
   }
 
-  // --- MOUSE DRAG & DROP LOGIC ---
+  // Mouse Drag & Drop Logic
   function getCanvasMousePos(e) {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    // Scale mouse coordinates properly relative to canvas element boundaries
     return {
       x: ((e.clientX - rect.left) / rect.width) * canvas.width,
       y: ((e.clientY - rect.top) / rect.height) * canvas.height,
@@ -99,8 +95,6 @@ export default function App() {
 
   function handleMouseDown(e) {
     const mouse = getCanvasMousePos(e);
-    
-    // Scan layers backwards (top to bottom) to grab the topmost clicked layer
     const clickedLayer = [...layers].reverse().find(l => {
       return l.visible && 
              mouse.x >= l.x && mouse.x <= l.x + l.width &&
@@ -120,11 +114,7 @@ export default function App() {
     
     setLayers(prev => prev.map(l => {
       if (l.id === activeLayer) {
-        return {
-          ...l,
-          x: mouse.x - dragStart.x,
-          y: mouse.y - dragStart.y
-        };
+        return { ...l, x: mouse.x - dragStart.x, y: mouse.y - dragStart.y };
       }
       return l;
     }));
@@ -134,7 +124,7 @@ export default function App() {
     setIsDragging(false);
   }
 
-  // --- EXPORT FUNCTION ---
+  // Export Canvas
   function downloadImage() {
     const canvas = canvasRef.current;
     const link = document.createElement("a");
@@ -144,7 +134,7 @@ export default function App() {
     link.click();
   }
 
-  // --- RENDERING CORE CYCLE ---
+  // Render Engine Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -164,7 +154,6 @@ export default function App() {
       loadedLayers.forEach(({ img, layer }) => {
         ctx.save();
 
-        // 1. Position/Translate and Clip (Cutout)
         if (layer.isCircleCutout) {
           ctx.beginPath();
           const centerX = layer.x + layer.width / 2;
@@ -174,15 +163,11 @@ export default function App() {
           ctx.clip();
         }
 
-        // 2. Apply Filters
         ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`;
-        
-        // 3. Draw image using Crop parameters
-        // Arguments: drawImage(img, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
         ctx.drawImage(
           img,
-          layer.cropX, layer.cropY, layer.cropW, layer.cropH, // Source crop definitions
-          layer.x, layer.y, layer.width, layer.height         // Canvas target rendering dimensions
+          layer.cropX, layer.cropY, layer.cropW, layer.cropH,
+          layer.x, layer.y, layer.width, layer.height
         );
         
         ctx.restore();
@@ -192,151 +177,206 @@ export default function App() {
 
   const currentLayerData = layers.find((l) => l.id === activeLayer);
 
+  // Common UI Styles for cleaner inline JSX code mapping
+  const panelHeaderStyle = { margin: "0 0 15px 0", fontSize: "14px", textTransform: "uppercase", letterSpacing: "1px", color: "#8a9ba8" };
+  const controlBtnStyle = { background: "#2f3136", color: "#fff", border: "none", borderRadius: "4px", padding: "6px 10px", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center" };
+
   return (
-    <div className="app" style={{ fontFamily: "sans-serif", padding: "20px", maxWidth: "1400px", margin: "0 auto" }}>
-      {/* HEADER */}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #eee", paddingBottom: "15px", marginBottom: "20px" }}>
-        <div>
-          <h1 style={{ margin: 0, color: "#222" }}>Lumox VE</h1>
-          <p style={{ margin: "5px 0 0 0", color: "#666" }}>v0.4 Professional Canvas Engine</p>
+    <div className="app" style={{ backgroundColor: "#121212", color: "#e1e1e1", fontFamily: "system-ui, -apple-system, sans-serif", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      
+      {/* TOP NAVIGATION HEADER BAR */}
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#1e1e1e", padding: "12px 24px", borderBottom: "1px solid #2d2d2d" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "15px" }}>
+          <h1 style={{ margin: 0, fontSize: "20px", fontWeight: "800", background: "linear-gradient(45deg, #0070f3, #00dfd8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Lumox VE</h1>
+          <span style={{ fontSize: "11px", backgroundColor: "#2d2d2d", padding: "3px 8px", borderRadius: "12px", color: "#a0a0a0" }}>v0.5 Pro Studio</span>
         </div>
         
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-            <label htmlFor="filename-input" style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>File Name</label>
+        {/* EXPORT PANEL CONTROLS */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", backgroundColor: "#2d2d2d", padding: "4px 8px", borderRadius: "6px" }}>
+            <span style={{ fontSize: "11px", color: "#aaa" }}>Name:</span>
             <input
-              id="filename-input"
               type="text"
               value={exportName}
               onChange={(e) => setExportName(e.target.value)}
-              style={{ padding: "6px 10px", borderRadius: "4px", border: "1px solid #ccc", width: "160px" }}
+              style={{ background: "transparent", border: "none", color: "#fff", fontSize: "13px", outline: "none", width: "140px", textAlign: "right" }}
             />
+            <span style={{ fontSize: "12px", color: "#666" }}>.png</span>
           </div>
-          <button onClick={downloadImage} disabled={layers.length === 0} style={{ padding: "10px 16px", backgroundColor: layers.length === 0 ? "#ccc" : "#0070f3", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: "bold", marginTop: "18px" }}>
-            💾 Download Image
+          <button 
+            onClick={downloadImage} 
+            disabled={layers.length === 0} 
+            style={{ 
+              padding: "8px 16px", 
+              backgroundColor: layers.length === 0 ? "#2d2d2d" : "#0070f3", 
+              color: layers.length === 0 ? "#666" : "#fff", 
+              border: "none", 
+              borderRadius: "6px", 
+              cursor: layers.length === 0 ? "not-allowed" : "pointer", 
+              fontWeight: "600",
+              fontSize: "13px",
+              boxShadow: layers.length === 0 ? "none" : "0 4px 12px rgba(0, 112, 243, 0.3)",
+              transition: "all 0.2s"
+            }}
+          >
+            💾 Export Image
           </button>
         </div>
       </header>
 
-      {/* TOOLBAR */}
-      <div className="toolbar" style={{ marginBottom: "20px", padding: "15px", backgroundColor: "#f5f5f5", borderRadius: "6px" }}>
-        <span style={{ marginRight: "10px", fontWeight: "bold" }}>Add Image Layer:</span>
-        <input type="file" accept="image/*" onChange={handleUpload} />
-      </div>
-
-      {/* MAIN WORKSPACE */}
-      <div className="workspace" style={{ display: "flex", gap: "20px" }}>
+      {/* RE-ARCHITECTED INTERACTIVE WORKSPACE AREA */}
+      <div className="workspace-layout" style={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
         
-        {/* LAYERS MANAGER (LEFT) */}
-        <div className="layers" style={{ width: "280px", border: "1px solid #ddd", borderRadius: "6px", padding: "15px", backgroundColor: "#fafafa" }}>
-          <h3 style={{ marginTop: 0, borderBottom: "2px solid #ddd", paddingBottom: "8px" }}>Layers ({layers.length})</h3>
-          {layers.length === 0 ? (
-            <p style={{ color: "#888", fontStyle: "italic", fontSize: "14px" }}>No layers uploaded yet.</p>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column-reverse", gap: "8px" }}>
-              {layers.map((layer, index) => (
+        {/* LEFT PANEL: LAYERS ARCHITECTURE CONTAINER */}
+        <div className="side-panel layers-manager" style={{ width: "300px", backgroundColor: "#1e1e1e", borderRight: "1px solid #2d2d2d", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "20px", borderBottom: "1px solid #2d2d2d", display: "flex", justifyContent: "between", alignItems: "center" }}>
+            <h3 style={{ ...panelHeaderStyle, margin: 0 }}>Layers Stack</h3>
+          </div>
+
+          {/* DYNAMIC FILE IMPORT ZONE */}
+          <div style={{ padding: "15px" }}>
+            <label style={{ display: "block", width: "100%", padding: "10px", boxSizing: "border-box", textAlign: "center", border: "2px dashed #3a3a3a", borderRadius: "8px", cursor: "pointer", color: "#aaa", fontSize: "13px", backgroundColor: "#151515" }}>
+              ➕ Import New Image
+              <input type="file" accept="image/*" onChange={handleUpload} style={{ display: "none" }} />
+            </label>
+          </div>
+
+          <div style={{ flexGrow: 1, overflowY: "auto", padding: "0 15px 15px 15px", display: "flex", flexDirection: "column-reverse", gap: "10px" }}>
+            {layers.length === 0 ? (
+              <p style={{ color: "#555", fontStyle: "italic", textAlign: "center", fontSize: "13px", marginTop: "20px" }}>No layers context detected.</p>
+            ) : (
+              layers.map((layer, index) => (
                 <div
                   key={layer.id}
                   onClick={() => setActiveLayer(layer.id)}
-                  style={{ padding: "12px", borderRadius: "4px", border: activeLayer === layer.id ? "2px solid #0070f3" : "1px solid #ccc", background: activeLayer === layer.id ? "#eef6ff" : "#fff", cursor: "pointer" }}
+                  style={{ 
+                    padding: "12px", 
+                    borderRadius: "8px", 
+                    border: activeLayer === layer.id ? "1px solid #0070f3" : "1px solid #2d2d2d", 
+                    background: activeLayer === layer.id ? "#1a2436" : "#151515", 
+                    cursor: "pointer",
+                    transition: "border 0.2s, background 0.2s"
+                  }}
                 >
                   <input
                     type="text"
                     value={layer.name}
                     onClick={(e) => e.stopPropagation()} 
                     onChange={(e) => renameLayer(layer.id, e.target.value)}
-                    style={{ width: "90%", marginBottom: "8px", fontWeight: "bold", border: "none", background: "transparent", borderBottom: "1px dashed #aaa" }}
+                    style={{ width: "100%", fontWeight: "600", fontSize: "13px", border: "none", background: "transparent", color: activeLayer === layer.id ? "#fff" : "#aaa", outline: "none", marginBottom: "10px" }}
                   />
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ display: "flex", gap: "4px" }}>
-                      <button onClick={(e) => { e.stopPropagation(); toggleLayer(layer.id); }}>{layer.visible ? "👁️" : "📁"}</button>
-                      <button onClick={(e) => { e.stopPropagation(); moveLayer(index, 1); }}>⬆</button>
-                      <button onClick={(e) => { e.stopPropagation(); moveLayer(index, -1); }}>⬇</button>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button title="Toggle Visibility" onClick={(e) => { e.stopPropagation(); toggleLayer(layer.id); }} style={controlBtnStyle}>
+                        {layer.visible ? "👁️" : "📁"}
+                      </button>
+                      <button title="Move Up" onClick={(e) => { e.stopPropagation(); moveLayer(index, 1); }} style={controlBtnStyle}>⬆</button>
+                      <button title="Move Down" onClick={(e) => { e.stopPropagation(); moveLayer(index, -1); }} style={controlBtnStyle}>⬇</button>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }} style={{ color: "red", background: "none", border: "none", cursor: "pointer" }}>🗑️</button>
+                    <button title="Delete Layer" onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }} style={{ ...controlBtnStyle, color: "#ff4d4f", background: "rgba(255,77,79,0.1)" }}>🗑️</button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </div>
 
-        {/* CANVAS INTERACTIVE CONTAINER (CENTER) */}
-        <div className="canvas-area" style={{ flexGrow: 1, display: "flex", justifyContent: "center" }}>
-          <canvas 
-            ref={canvasRef} 
-            width={800} 
-            height={500} 
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            style={{ border: "1px solid #333", boxShadow: "0 4px 12px rgba(0,0,0,0.15)", cursor: isDragging ? "grabbing" : "grab", background: "repeating-conic-gradient(#fff 0% 25%, #eee 0% 50%) 50% / 20px 20px" }} 
-          />
+        {/* CENTER VIEWPORT: THE CANVAS EDITING BACKDROP CONTAINER */}
+        <div className="canvas-viewport" style={{ flexGrow: 1, backgroundColor: "#0f0f0f", display: "flex", justifyContent: "center", alignItems: "center", padding: "20px" }}>
+          <div style={{ padding: "8px", backgroundColor: "#1e1e1e", borderRadius: "12px", boxShadow: "0 20px 50px rgba(0,0,0,0.4)" }}>
+            <canvas 
+              ref={canvasRef} 
+              width={800} 
+              height={500} 
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              style={{ 
+                display: "block",
+                borderRadius: "6px",
+                cursor: isDragging ? "grabbing" : "grab", 
+                background: "repeating-conic-gradient(#252525 0% 25%, #1e1e1e 0% 50%) 50% / 16px 16px" 
+              }} 
+            />
+          </div>
         </div>
 
-        {/* CONTROLS PANEL (RIGHT) */}
-        <div className="controls" style={{ width: "280px", border: "1px solid #ddd", borderRadius: "6px", padding: "15px", backgroundColor: "#fafafa" }}>
-          <h3 style={{ marginTop: 0, borderBottom: "2px solid #ddd", paddingBottom: "8px" }}>Transformations</h3>
+        {/* RIGHT PANEL: PROPERTY FILTER SLIDERS & TRANSFORMS */}
+        <div className="side-panel property-inspector" style={{ width: "300px", backgroundColor: "#1e1e1e", borderLeft: "1px solid #2d2d2d", padding: "20px", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+          <h3 style={panelHeaderStyle}>Inspector</h3>
           
           {currentLayerData ? (
-            <div>
-              <p style={{ fontSize: "14px" }}>Editing: <strong>{currentLayerData.name}</strong></p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
               
-              {/* CUTOUT SECTION */}
-              <div style={{ marginBottom: "20px", borderBottom: "1px solid #ddd", paddingBottom: "15px" }}>
-                <label style={{ fontWeight: "bold", fontSize: "14px" }}>Shape Cutout</label>
-                <div style={{ marginTop: "8px" }}>
-                  <button 
-                    onClick={() => updateActiveLayerSetting("isCircleCutout", !currentLayerData.isCircleCutout)}
-                    style={{ width: "100%", padding: "6px", backgroundColor: currentLayerData.isCircleCutout ? "#e6f4ea" : "#fff", border: currentLayerData.isCircleCutout ? "1px solid #137333" : "1px solid #ccc", color: currentLayerData.isCircleCutout ? "#137333" : "#333", borderRadius: "4px", cursor: "pointer" }}
-                  >
-                    {currentLayerData.isCircleCutout ? "🟢 Circle Mask On" : "⚪ Apply Circle Mask"}
-                  </button>
+              {/* SHAPE MASK CONFIG */}
+              <div>
+                <span style={{ fontSize: "12px", color: "#8a9ba8", fontWeight: "600", display: "block", marginBottom: "8px" }}>MASKING</span>
+                <button 
+                  onClick={() => updateActiveLayerSetting("isCircleCutout", !currentLayerData.isCircleCutout)}
+                  style={{ 
+                    width: "100%", 
+                    padding: "10px", 
+                    backgroundColor: currentLayerData.isCircleCutout ? "#1e3a2f" : "#252525", 
+                    border: currentLayerData.isCircleCutout ? "1px solid #137333" : "1px solid #3a3a3a", 
+                    color: currentLayerData.isCircleCutout ? "#4ade80" : "#ccc", 
+                    borderRadius: "6px", 
+                    cursor: "pointer",
+                    fontSize: "13px",
+                    fontWeight: "500"
+                  }}
+                >
+                  {currentLayerData.isCircleCutout ? "🟢 Circle Cutout Active" : "⚪ Apply Circle Cutout"}
+                </button>
+              </div>
+
+              {/* CROPPING GEOMETRY MODULE */}
+              <div style={{ borderTop: "1px solid #2d2d2d", paddingTop: "15px" }}>
+                <span style={{ fontSize: "12px", color: "#8a9ba8", fontWeight: "600", display: "block", marginBottom: "12px" }}>CROP DIMENSIONS</span>
+                
+                <div style={{ marginBottom: "12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}>
+                    <label style={{ color: "#aaa" }}>Crop Width Bounds</label>
+                    <span style={{ color: "#fff" }}>{currentLayerData.cropW}px</span>
+                  </div>
+                  <input type="range" min="50" max={currentLayerData.nativeWidth} value={currentLayerData.cropW} onChange={(e) => updateActiveLayerSetting("cropW", Number(e.target.value))} style={{ width: "100%" }} />
+                </div>
+
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}>
+                    <label style={{ color: "#aaa" }}>Crop Height Bounds</label>
+                    <span style={{ color: "#fff" }}>{currentLayerData.cropH}px</span>
+                  </div>
+                  <input type="range" min="50" max={currentLayerData.nativeHeight} value={currentLayerData.cropH} onChange={(e) => updateActiveLayerSetting("cropH", Number(e.target.value))} style={{ width: "100%" }} />
                 </div>
               </div>
 
-              {/* CROPPING SLIDERS */}
-              <div style={{ marginBottom: "20px", borderBottom: "1px solid #ddd", paddingBottom: "15px" }}>
-                <label style={{ fontWeight: "bold", fontSize: "14px" }}>Crop Width Bounds</label>
-                <input
-                  type="range"
-                  min="50"
-                  max={currentLayerData.nativeWidth}
-                  value={currentLayerData.cropW}
-                  onChange={(e) => updateActiveLayerSetting("cropW", Number(e.target.value))}
-                  style={{ width: "100%", marginTop: "5px" }}
-                />
-                <label style={{ fontWeight: "bold", fontSize: "14px", display: "block", marginTop: "10px" }}>Crop Height Bounds</label>
-                <input
-                  type="range"
-                  min="50"
-                  max={currentLayerData.nativeHeight}
-                  value={currentLayerData.cropH}
-                  onChange={(e) => updateActiveLayerSetting("cropH", Number(e.target.value))}
-                  style={{ width: "100%", marginTop: "5px" }}
-                />
+              {/* ENHANCEMENT FILTERS MODULE */}
+              <div style={{ borderTop: "1px solid #2d2d2d", paddingTop: "15px" }}>
+                <span style={{ fontSize: "12px", color: "#8a9ba8", fontWeight: "600", display: "block", marginBottom: "12px" }}>FILTERS & ADJUSTMENTS</span>
+                
+                <div style={{ marginBottom: "12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}>
+                    <label style={{ color: "#aaa" }}>Brightness</label>
+                    <span style={{ color: "#fff" }}>{currentLayerData.brightness}%</span>
+                  </div>
+                  <input type="range" min="0" max="200" value={currentLayerData.brightness} onChange={(e) => updateActiveLayerSetting("brightness", Number(e.target.value))} style={{ width: "100%" }} />
+                </div>
+
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}>
+                    <label style={{ color: "#aaa" }}>Contrast</label>
+                    <span style={{ color: "#fff" }}>{currentLayerData.contrast}%</span>
+                  </div>
+                  <input type="range" min="0" max="200" value={currentLayerData.contrast} onChange={(e) => updateActiveLayerSetting("contrast", Number(e.target.value))} style={{ width: "100%" }} />
+                </div>
               </div>
 
-              {/* FILTERS */}
-              <div style={{ marginBottom: "15px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "14px" }}>
-                  <label>Brightness</label>
-                  <span>{currentLayerData.brightness}%</span>
-                </div>
-                <input type="range" min="0" max="200" value={currentLayerData.brightness} onChange={(e) => updateActiveLayerSetting("brightness", Number(e.target.value))} style={{ width: "100%" }} />
-              </div>
-
-              <div style={{ marginBottom: "15px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "14px" }}>
-                  <label>Contrast</label>
-                  <span>{currentLayerData.contrast}%</span>
-                </div>
-                <input type="range" min="0" max="200" value={currentLayerData.contrast} onChange={(e) => updateActiveLayerSetting("contrast", Number(e.target.value))} style={{ width: "100%" }} />
-              </div>
             </div>
           ) : (
-            <p style={{ color: "#666", fontStyle: "italic", fontSize: "14px" }}>Select a layer to adjust properties.</p>
+            <div style={{ textAlign: "center", marginTop: "40px", color: "#555", fontSize: "13px", fontStyle: "italic" }}>
+              Select an image layer to inspect properties.
+            </div>
           )}
         </div>
 
