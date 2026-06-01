@@ -1,0 +1,46 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0f0f0f;
+  color: white;
+}
+
+.app {
+  text-align: center;
+  padding: 20px;
+}
+
+h1 {
+  margin-bottom: 0;
+}
+
+p {
+  margin-top: 5px;
+  color: #aaa;
+}
+
+input {
+  margin: 20px 0;
+}
+
+.canvas-area {
+  margin: 20px auto;
+  width: 90%;
+  max-width: 800px;
+  min-height: 400px;
+  background: #1c1c1c;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.canvas-area img {
+  max-width: 100%;
+  max-height: 500px;
+}
+
+.placeholder {
+  color: #666;
+}
