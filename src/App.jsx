@@ -3,7 +3,7 @@ import { useRef, useState, useEffect } from "react";
 export default function App() {
   const canvasRef = useRef(null);
 
-  // Custom Router State for Netlify / WebIntoApp APK
+  // Custom Router State for WebIntoApp APK / Netlify
   const [currentPath, setCurrentPath] = useState(window.location.hash || "#/");
 
   // Core App States
@@ -13,12 +13,15 @@ export default function App() {
   
   // Tool Modes: "move", "crop", "cutout"
   const [editMode, setEditMode] = useState("move");
+  // Cutout Sub-Modes: "erase" (remove background) or "restore" (uncutout / paint back)
+  const [cutoutBrushMode, setCutoutBrushMode] = useState("erase");
+  const [brushSize, setBrushSize] = useState(30);
 
-  // Interaction & Touch States
+  // Interaction States
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [lastTap, setLastTap] = useState(0);
-  const [activeHandle, setActiveHandle] = useState(null); // Tracking crop box corners
+  const [cropBox, setCropBox] = useState(null); // { x, y, w, h } relative to canvas
+  const [activeHandle, setActiveHandle] = useState(null);
 
   // Sync Router Hash
   useEffect(() => {
@@ -50,36 +53,36 @@ export default function App() {
         const w = img.width * scale;
         const h = img.height * scale;
 
+        // Create an off-screen mask canvas for custom background erasure (Alpha channel tracking)
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = img.width;
+        maskCanvas.height = img.height;
+        const mCtx = maskCanvas.getContext("2d");
+        // Fill completely white (100% visible initially)
+        mCtx.fillStyle = "#ffffff";
+        mCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+
         const newLayer = {
           id: Date.now(),
-          type: "image",
           name: `Layer ${layers.length + 1}`,
           image: reader.result,
           visible: true,
           brightness: 100,
           contrast: 100,
           opacity: 100,
-          blendMode: "source-over",
           x: (800 - w) / 2, 
           y: (500 - h) / 2,
           width: w,
           height: h,
-          
-          // True Cropping Coordinates (relative to original image sizing)
-          cropX: 0,
-          cropY: 0,
-          cropW: img.width,
-          cropH: img.height,
-          
-          // True Cutout/Masking Type: "none", "circle", "rect"
-          cutoutType: "none",
-          cutoutX: 0,
-          cutoutY: 0,
-          cutoutW: w,
-          cutoutH: h,
-
           nativeWidth: img.width,
-          nativeHeight: img.height
+          nativeHeight: img.height,
+          // Store mask as dataURL so it travels safely with state changes
+          maskData: maskCanvas.toDataURL(),
+          // Source image viewport coordinates for rendering modifications
+          sX: 0,
+          sY: 0,
+          sW: img.width,
+          sH: img.height
         };
 
         triggerHaptic(50);
@@ -91,11 +94,16 @@ export default function App() {
     reader.readAsDataURL(file);
   }
 
-  function updateActiveLayerSetting(setting, value) {
-    setLayers((prev) => prev.map((l) => (l.id === activeLayer ? { ...l, [setting]: value } : l)));
-  }
+  // Initialize crop coordinates based on current active layer bounding box
+  useEffect(() => {
+    const layer = layers.find(l => l.id === activeLayer);
+    if (editMode === "crop" && layer) {
+      setCropBox({ x: layer.x, y: layer.y, w: layer.width, h: layer.height });
+    } else {
+      setCropBox(null);
+    }
+  }, [editMode, activeLayer]);
 
-  // --- INTERACTIVE TOUCH & INPUT COORDINATE MAPPING ---
   function getCanvasInputPos(e) {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -110,43 +118,131 @@ export default function App() {
     };
   }
 
+  // --- EXECUTE ACTUAL HANDOUT CROPPER ---
+  function applyCrop() {
+    if (!cropBox || !activeLayer) return;
+    triggerHaptic(60);
+
+    setLayers(prev => prev.map(l => {
+      if (l.id === activeLayer) {
+        // Calculate percentages of visual crop to translate to original image resolution pixels
+        const scaleX = l.nativeWidth / l.width;
+        const scaleY = l.nativeHeight / l.height;
+
+        const newSX = l.sX + (cropBox.x - l.x) * scaleX;
+        const newSY = l.sY + (cropBox.y - l.y) * scaleY;
+        const newSW = cropBox.w * scaleX;
+        const newSH = cropBox.h * scaleY;
+
+        return {
+          ...l,
+          x: cropBox.x,
+          y: cropBox.y,
+          width: cropBox.w,
+          height: cropBox.h,
+          sX: Math.max(0, newSX),
+          sY: Math.max(0, newSY),
+          sW: Math.min(l.nativeWidth, newSW),
+          sH: Math.min(l.nativeHeight, newSH)
+        };
+      }
+      return l;
+    }));
+    setEditMode("move");
+  }
+
+  // --- MANUAL BACKGROUND REMOVAL DRAWING ENGINE ---
+  function drawCutoutMask(pos) {
+    const layer = layers.find(l => l.id === activeLayer);
+    if (!layer) return;
+
+    // Convert canvas coordinates to the inner pixel spaces of the native asset image
+    const scaleX = layer.nativeWidth / layer.width;
+    const scaleY = layer.nativeHeight / layer.height;
+    
+    const imgX = (pos.x - layer.x) * scaleX;
+    const imgY = (pos.y - layer.y) * scaleY;
+
+    // Reconstruct temporary mask canvas environment
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = layer.nativeWidth;
+    tempCanvas.height = layer.nativeHeight;
+    const tempCtx = tempCanvas.getContext("2d");
+
+    const maskImg = new Image();
+    maskImg.src = layer.maskData;
+    maskImg.onload = () => {
+      tempCtx.drawImage(maskImg, 0, 0);
+
+      // Erase background layer or uncutout (restore) background pixels
+      tempCtx.save();
+      tempCtx.beginPath();
+      tempCtx.arc(imgX, imgY, brushSize * scaleX, 0, Math.PI * 2);
+      
+      if (cutoutBrushMode === "erase") {
+        // Turn drawn areas transparent black on mask canvas
+        tempCtx.globalCompositeOperation = "destination-out";
+        tempCtx.fill();
+      } else {
+        // Restore: Paint full white visibility channel back on mask canvas
+        tempCtx.globalCompositeOperation = "source-over";
+        tempCtx.fillStyle = "#ffffff";
+        tempCtx.fill();
+      }
+      tempCtx.restore();
+
+      // Push updated alpha mask tracking parameters into active data array state
+      setLayers(prev => prev.map(l => l.id === activeLayer ? { ...l, maskData: tempCanvas.toDataURL() } : l));
+    };
+  }
+
+  // Reset the cutout entirely (Uncutout All)
+  function clearCutout() {
+    const layer = layers.find(l => l.id === activeLayer);
+    if (!layer) return;
+    triggerHaptic(40);
+
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = layer.nativeWidth;
+    tempCanvas.height = layer.nativeHeight;
+    const tempCtx = tempCanvas.getContext("2d");
+    tempCtx.fillStyle = "#ffffff";
+    tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+    updateActiveLayerSetting("maskData", tempCanvas.toDataURL());
+  }
+
   function handleStart(e) {
     const pos = getCanvasInputPos(e);
     const layer = layers.find(l => l.id === activeLayer);
 
-    // CROP MODE INTERACTION: Checking corner handles
-    if (editMode === "crop" && layer) {
-      const handleSize = 20;
-      // Right-Bottom Corner Handle Check
-      if (Math.abs(pos.x - (layer.x + layer.width)) < handleSize && Math.abs(pos.y - (layer.y + layer.height)) < handleSize) {
+    // Crop Corner Intercept checks
+    if (editMode === "crop" && cropBox) {
+      const handleSize = 25;
+      if (Math.abs(pos.x - (cropBox.x + cropBox.w)) < handleSize && Math.abs(pos.y - (cropBox.y + cropBox.h)) < handleSize) {
         setActiveHandle("bottom-right");
         setIsDragging(true);
         return;
       }
     }
 
-    // NORMAL MODE: Finding clicked layer
+    // Interactive Manual Background cutout execution check
+    if (editMode === "cutout") {
+      setIsDragging(true);
+      drawCutoutMask(pos);
+      return;
+    }
+
+    // Normal moving logic detection
     const clickedLayer = [...layers].reverse().find(l => {
-      return l.visible && 
-             pos.x >= l.x && pos.x <= l.x + l.width &&
-             pos.y >= l.y && pos.y <= l.y + l.height;
+      return l.visible && pos.x >= l.x && pos.x <= l.x + l.width && pos.y >= l.y && pos.y <= l.y + l.height;
     });
 
     if (clickedLayer) {
-      const now = Date.now();
-      if (now - lastTap < 250 && activeLayer === clickedLayer.id) {
-        // Double tap resets transformations
-        triggerHaptic([40, 40]);
-        setLayers(prev => prev.map(l => (l.id === activeLayer ? { ...l, x: (800 - l.width) / 2, y: (500 - l.height) / 2 } : l)));
-        return;
-      }
-      setLastTap(now);
-
       if (activeLayer !== clickedLayer.id) {
         triggerHaptic(30);
         setActiveLayer(clickedLayer.id);
       }
-      
       if (editMode === "move") {
         setIsDragging(true);
         setDragStart({ x: pos.x - clickedLayer.x, y: pos.y - clickedLayer.y });
@@ -159,33 +255,23 @@ export default function App() {
     if (e.cancelable) e.preventDefault();
     const pos = getCanvasInputPos(e);
 
-    setLayers(prev => prev.map(l => {
-      if (l.id === activeLayer) {
-        // If altering crop limits dynamically via corner handles
-        if (editMode === "crop" && activeHandle === "bottom-right") {
-          const newWidth = Math.max(40, pos.x - l.x);
-          const newHeight = Math.max(40, pos.y - l.y);
-          
-          // Map visual bounding changes back safely onto native image pixel space
-          const scaleX = l.nativeWidth / (l.width || 1);
-          const scaleY = l.nativeHeight / (l.height || 1);
+    if (editMode === "cutout") {
+      drawCutoutMask(pos);
+      return;
+    }
 
-          return {
-            ...l,
-            cropW: Math.min(l.nativeWidth, newWidth * scaleX),
-            cropH: Math.min(l.nativeHeight, newHeight * scaleY),
-            width: newWidth,
-            height: newHeight
-          };
-        }
+    if (editMode === "crop" && activeHandle === "bottom-right" && cropBox) {
+      setCropBox(prev => ({
+        ...prev,
+        w: Math.max(30, pos.x - prev.x),
+        h: Math.max(30, pos.y - prev.y)
+      }));
+      return;
+    }
 
-        // Standard Layer Moving
-        if (editMode === "move") {
-          return { ...l, x: pos.x - dragStart.x, y: pos.y - dragStart.y };
-        }
-      }
-      return l;
-    }));
+    if (editMode === "move") {
+      setLayers(prev => prev.map(l => l.id === activeLayer ? { ...l, x: pos.x - dragStart.x, y: pos.y - dragStart.y } : l));
+    }
   }
 
   function handleEnd() {
@@ -193,15 +279,7 @@ export default function App() {
     setActiveHandle(null);
   }
 
-  // Clear Canvas Stack
-  function deleteLayer(id) {
-    triggerHaptic(40);
-    const remaining = layers.filter(l => l.id !== id);
-    setLayers(remaining);
-    if (remaining.length === 0) navigateTo("#/upload-image");
-  }
-
-  // --- CANVAS CORE DRAW & FILTER PIPELINE ---
+  // Draw Engine loop mapping parameters on active Canvas elements
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -211,57 +289,66 @@ export default function App() {
     const loadPromises = layers.filter(l => l.visible).map((layer) => {
       return new Promise((resolve) => {
         const img = new Image();
+        const mask = new Image();
+        let loadedCount = 0;
+
+        const checkLoad = () => {
+          loadedCount++;
+          if (loadedCount === 2) resolve({ img, mask, layer });
+        };
+
         img.src = layer.image;
-        img.onload = () => resolve({ img, layer });
+        mask.src = layer.maskData;
+        img.onload = checkLoad;
+        mask.onload = checkLoad;
       });
     });
 
     Promise.all(loadPromises).then((loadedLayers) => {
-      loadedLayers.forEach(({ img, layer }) => {
+      loadedLayers.forEach(({ img, mask, layer }) => {
         ctx.save();
-        
-        ctx.globalCompositeOperation = layer.blendMode;
         ctx.globalAlpha = layer.opacity / 100;
 
-        // Apply Cutout Masks directly onto context rendering coordinates
-        if (layer.cutoutType === "circle") {
-          ctx.beginPath();
-          const cx = layer.x + layer.width / 2;
-          const cy = layer.y + layer.height / 2;
-          const radius = Math.min(layer.width, layer.height) / 2;
-          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-          ctx.clip();
-        } else if (layer.cutoutType === "rect") {
-          ctx.beginPath();
-          ctx.rect(layer.x + 20, layer.y + 20, layer.width - 40, layer.height - 40);
-          ctx.clip();
-        }
-
-        // Color Processing Filters
+        // Render standard filters
         ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`;
 
-        // Render cropped source values into target workspace dimensions
+        // 1. Create masked background cut out via offscreen canvas rendering
+        const renderCanvas = document.createElement("canvas");
+        renderCanvas.width = layer.nativeWidth;
+        renderCanvas.height = layer.nativeHeight;
+        const rCtx = renderCanvas.getContext("2d");
+
+        // Draw original raw photo asset texture
+        rCtx.drawImage(img, 0, 0);
+        // Crop transparent overlay mask
+        rCtx.globalCompositeOperation = "destination-in";
+        rCtx.drawImage(mask, 0, 0);
+
+        // 2. Output final processed texture safely mapped inside active workspace coordinates
         ctx.drawImage(
-          img,
-          layer.cropX, layer.cropY, layer.cropW, layer.cropH,
+          renderCanvas,
+          layer.sX, layer.sY, layer.sW, layer.sH,
           layer.x, layer.y, layer.width, layer.height
         );
 
-        // Draw active interactive bounding indicators if editMode is active
-        if (editMode === "crop" && layer.id === activeLayer) {
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = "#0070f3";
-          ctx.strokeRect(layer.x, layer.y, layer.width, layer.height);
-          
-          // Anchor handle target
-          ctx.fillStyle = "#00dfd8";
-          ctx.fillRect(layer.x + layer.width - 10, layer.y + layer.height - 10, 15, 15);
-        }
-
         ctx.restore();
       });
+
+      // Overlay separate visual cropping outline helper widgets over target graphics area
+      if (editMode === "crop" && cropBox) {
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#0070f3";
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(cropBox.x, cropBox.y, cropBox.w, cropBox.h);
+        
+        // Grab Handle square point
+        ctx.fillStyle = "#00dfd8";
+        ctx.fillRect(cropBox.x + cropBox.w - 10, cropBox.y + cropBox.h - 10, 20, 20);
+        ctx.restore();
+      }
     });
-  }, [layers, currentPath, editMode, activeLayer]);
+  }, [layers, currentPath, editMode, cropBox]);
 
   function downloadImage() {
     triggerHaptic(80);
@@ -274,13 +361,13 @@ export default function App() {
 
   const currentLayerData = layers.find((l) => l.id === activeLayer);
 
-  // --- ROUTER VIEW ROUTING ---
+  // --- VIEWS CONTROLLER ---
   if (currentPath === "#/" || currentPath === "") {
     return (
       <div style={{ backgroundColor: "#121212", color: "#fff", minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", fontFamily: "sans-serif", textAlign: "center", padding: "20px" }}>
         <h1 style={{ fontSize: "42px", margin: "0", background: "linear-gradient(45deg, #0070f3, #00dfd8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: "900" }}>Lumox VE</h1>
-        <p style={{ color: "#666", marginBottom: "30px" }}>Precision Mobile Cropping & Cutout Studio</p>
-        <button onClick={() => navigateTo("#/upload-image")} style={{ padding: "12px 30px", backgroundColor: "#0070f3", color: "#fff", border: "none", borderRadius: "6px", fontWeight: "bold" }}>Start Project</button>
+        <p style={{ color: "#666", marginBottom: "30px" }}>Manual Background Remover & Advanced Image Cropper</p>
+        <button onClick={() => navigateTo("#/upload-image")} style={{ padding: "12px 30px", backgroundColor: "#0070f3", color: "#fff", border: "none", borderRadius: "6px", fontWeight: "bold" }}>Start Workspace</button>
       </div>
     );
   }
@@ -289,9 +376,9 @@ export default function App() {
     return (
       <div style={{ backgroundColor: "#121212", color: "#fff", minHeight: "100vh", display: "flex", justifyContent: "center", alignItems: "center", fontFamily: "sans-serif" }}>
         <div style={{ backgroundColor: "#1e1e1e", padding: "30px", borderRadius: "12px", border: "1px solid #2d2d2d", textAlign: "center", width: "90%", maxWidth: "360px" }}>
-          <h3 style={{ margin: "0 0 10px 0" }}>Import Image Asset</h3>
+          <h3 style={{ margin: "0 0 10px 0" }}>Import Base Image</h3>
           <label style={{ display: "block", padding: "30px 10px", border: "2px dashed #0070f3", borderRadius: "8px", cursor: "pointer", color: "#0070f3", fontWeight: "bold", backgroundColor: "#151515" }}>
-            Select File
+            Select File Asset
             <input type="file" accept="image/*" onChange={handleUpload} style={{ display: "none" }} />
           </label>
         </div>
@@ -301,16 +388,15 @@ export default function App() {
 
   return (
     <div style={{ backgroundColor: "#121212", color: "#e1e1e1", fontFamily: "system-ui, sans-serif", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      {/* APP TOP HEADER */}
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#1e1e1e", padding: "10px", borderBottom: "1px solid #2d2d2d" }}>
-        <span onClick={() => navigateTo("#/ text")} style={{ fontWeight: "bold", background: "linear-gradient(45deg, #0070f3, #00dfd8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Lumox Workspace</span>
+        <span style={{ fontWeight: "bold", background: "linear-gradient(45deg, #0070f3, #00dfd8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Lumox Studio</span>
         <div style={{ display: "flex", gap: "6px" }}>
           <input type="text" value={exportName} onChange={(e) => setExportName(e.target.value)} style={{ background: "#2d2d2d", border: "none", color: "#fff", padding: "4px 8px", borderRadius: "4px", width: "100px", fontSize: "12px" }} />
           <button onClick={downloadImage} style={{ background: "#0070f3", color: "#fff", border: "none", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", fontWeight: "bold" }}>Save</button>
         </div>
       </header>
 
-      {/* CORE VIEWPORT */}
+      {/* WORKSPACE PREVIEW FRAME */}
       <div style={{ backgroundColor: "#0f0f0f", display: "flex", justifyContent: "center", alignItems: "center", padding: "10px", minHeight: "320px", flexGrow: 1 }}>
         <div style={{ padding: "4px", backgroundColor: "#1e1e1e", borderRadius: "8px", maxWidth: "100%" }}>
           <canvas 
@@ -322,60 +408,71 @@ export default function App() {
         </div>
       </div>
 
-      {/* MOBILE LOWER TOOL CONTROLS FOOTER */}
+      {/* DYNAMIC OPERATION OPTIONS LOWER PANEL FOOTER */}
       <div style={{ backgroundColor: "#1e1e1e", borderTop: "1px solid #2d2d2d", padding: "12px" }}>
         
-        {/* MODE ACTIONS SELECTOR */}
-        <div style={{ display: "flex", gap: "8px", marginBottom: "15px", justifyContent: "center" }}>
-          <button onClick={() => setEditMode("move")} style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "12px", fontWeight: "bold", backgroundColor: editMode === "move" ? "#0070f3" : "#2d2d2d", color: "#fff" }}>
-            🖐️ Drag & Move
+        {/* SELECT CONTROL APPLICATION MODES */}
+        <div style={{ display: "flex", gap: "6px", marginBottom: "12px", justifyContent: "center", flexWrap: "wrap" }}>
+          <button onClick={() => setEditMode("move")} style={{ padding: "8px 12px", borderRadius: "4px", border: "none", fontSize: "11px", fontWeight: "bold", backgroundColor: editMode === "move" ? "#0070f3" : "#2d2d2d", color: "#fff" }}>
+            🖐️ Move Layer
           </button>
-          <button onClick={() => { setEditMode("crop"); triggerHaptic(20); }} style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "12px", fontWeight: "bold", backgroundColor: editMode === "crop" ? "#0070f3" : "#2d2d2d", color: "#fff" }}>
-            📐 Crop Canvas Box
+          <button onClick={() => setEditMode("crop")} style={{ padding: "8px 12px", borderRadius: "4px", border: "none", fontSize: "11px", fontWeight: "bold", backgroundColor: editMode === "crop" ? "#0070f3" : "#2d2d2d", color: "#fff" }}>
+            📐 Crop Tool
+          </button>
+          <button onClick={() => setEditMode("cutout")} style={{ padding: "8px 12px", borderRadius: "4px", border: "none", fontSize: "11px", fontWeight: "bold", backgroundColor: editMode === "cutout" ? "#0070f3" : "#2d2d2d", color: "#fff" }}>
+            ✂️ Cutout BG (Draw)
           </button>
         </div>
 
-        {/* DETAILED INSPECTION SUBPANEL */}
+        {/* SUBMODIFIERS AND UTILITY ACTIONS */}
         {currentLayerData ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px", maxWidth: "500px", margin: "0 auto", fontSize: "12px" }}>
+          <div style={{ maxWidth: "500px", margin: "0 auto", fontSize: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>
             
-            {/* REAL-TIME DYNAMIC CUTOUT ACTION BUTTONS */}
-            <div style={{ borderBottom: "1px solid #2d2d2d", paddingBottom: "10px" }}>
-              <span style={{ display: "block", color: "#8a9ba8", fontWeight: "bold", marginBottom: "6px", fontSize: "10px" }}>ISOLATED SHAPE CUTOUTS</span>
-              <div style={{ display: "flex", gap: "6px" }}>
-                <button onClick={() => updateActiveLayerSetting("cutoutType", "none")} style={{ flex: 1, padding: "6px", borderRadius: "4px", border: "none", backgroundColor: currentLayerData.cutoutType === "none" ? "#3a3a3a" : "#2d2d2d", color: "#fff" }}>No Cutout</button>
-                <button onClick={() => { updateActiveLayerSetting("cutoutType", "circle"); triggerHaptic(30); }} style={{ flex: 1, padding: "6px", borderRadius: "4px", border: "none", backgroundColor: currentLayerData.cutoutType === "circle" ? "#137333" : "#2d2d2d", color: currentLayerData.cutoutType === "circle" ? "#4ade80" : "#fff" }}>🟢 Circle Clip</button>
-                <button onClick={() => { updateActiveLayerSetting("cutoutType", "rect"); triggerHaptic(30); }} style={{ flex: 1, padding: "6px", borderRadius: "4px", border: "none", backgroundColor: currentLayerData.cutoutType === "rect" ? "#137333" : "#2d2d2d", color: currentLayerData.cutoutType === "rect" ? "#4ade80" : "#fff" }}>⬛ Square Border</button>
-              </div>
-            </div>
-
-            {/* QUICK TRANSFORMS LAYER STACK UTILS */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>Editing: <span style={{ color: "#00dfd8", fontWeight: "bold" }}>{currentLayerData.name}</span></div>
-              <button onClick={() => deleteLayer(currentLayerData.id)} style={{ background: "rgba(255,77,79,0.15)", color: "#ff4d4f", border: "none", padding: "4px 10px", borderRadius: "4px" }}>Delete Layer 🗑️</button>
-            </div>
-
-            {/* COMPOSITING FILTERS SLIDERS */}
-            <div style={{ display: "flex", gap: "10px" }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ color: "#aaa", display: "block", marginBottom: "2px" }}>Opacity ({currentLayerData.opacity}%)</label>
-                <input type="range" min="0" max="100" value={currentLayerData.opacity} onChange={(e) => updateActiveLayerSetting("opacity", Number(e.target.value))} style={{ width: "100%" }} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ color: "#aaa", display: "block", marginBottom: "2px" }}>Brightness ({currentLayerData.brightness}%)</label>
-                <input type="range" min="0" max="200" value={currentLayerData.brightness} onChange={(e) => updateActiveLayerSetting("brightness", Number(e.target.value))} style={{ width: "100%" }} />
-              </div>
-            </div>
-
+            {/* CROP EXECUTOR MODE UI */}
             {editMode === "crop" && (
-              <p style={{ margin: "5px 0 0 0", fontSize: "11px", color: "#00dfd8", textAlign: "center", fontStyle: "italic" }}>
-                👉 Drag the glowing cyan corner handle on the canvas to manually resize the cropped boundary region.
-              </p>
+              <div style={{ backgroundColor: "#151515", padding: "10px", borderRadius: "6px", textAlign: "center" }}>
+                <p style={{ margin: "0 0 8px 0", color: "#aaa" }}>Drag the cyan bottom-right corner anchor on the canvas frame box.</p>
+                <button onClick={applyCrop} style={{ backgroundColor: "#0070f3", color: "#fff", border: "none", padding: "6px 16px", borderRadius: "4px", fontWeight: "bold" }}>
+                  Confirm & Cut Crop Clear
+                </button>
+              </div>
             )}
+
+            {/* CUTOUT REMOVER BACKGROUND DRAW MODE UI */}
+            {editMode === "cutout" && (
+              <div style={{ backgroundColor: "#151515", padding: "10px", borderRadius: "6px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button onClick={() => setCutoutBrushMode("erase")} style={{ flex: 1, padding: "6px", borderRadius: "4px", border: "none", backgroundColor: cutoutBrushMode === "erase" ? "#ff4d4f" : "#2d2d2d", color: "#fff", fontWeight: "bold" }}>
+                    🔴 Erase Background
+                  </button>
+                  <button onClick={() => setCutoutBrushMode("restore")} style={{ flex: 1, padding: "6px", borderRadius: "4px", border: "none", backgroundColor: cutoutBrushMode === "restore" ? "#137333" : "#2d2d2d", color: "#fff", fontWeight: "bold" }}>
+                    🟢 Paint Back (Uncutout)
+                  </button>
+                </div>
+                
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "4px" }}>
+                  <label style={{ color: "#aaa" }}>Brush Size ({brushSize}px)</label>
+                  <input type="range" min="5" max="80" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} style={{ width: "60%" }} />
+                </div>
+
+                <button onClick={clearCutout} style={{ background: "none", border: "none", color: "#ff4d4f", fontSize: "11px", cursor: "pointer", textDecoration: "underline", alignSelf: "center" }}>
+                  Reset Layer (Clear All Cutouts)
+                </button>
+              </div>
+            )}
+
+            {/* BASIC LAYER STATS */}
+            <div style={{ display: "flex", justifyContent: "space-between", color: "#8a9ba8", fontSize: "11px", marginTop: "4px" }}>
+              <span>Target Layer: <b>{currentLayerData.name}</b></span>
+              <label style={{ display: "inline-block" }}>
+                📁 Add Layer Over
+                <input type="file" accept="image/*" onChange={handleUpload} style={{ display: "none" }} />
+              </label>
+            </div>
 
           </div>
         ) : (
-          <p style={{ textAlign: "center", color: "#555", fontStyle: "italic", margin: "5px 0" }}>Tap an asset layer inside the workspace to enable modifiers.</p>
+          <p style={{ textAlign: "center", color: "#555", fontStyle: "italic" }}>Tap the image workspace layer to unlock editing modules.</p>
         )}
       </div>
     </div>
